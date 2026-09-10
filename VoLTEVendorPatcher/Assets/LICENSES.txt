@@ -1,0 +1,11 @@
+VoLTE Vendor Patcher bundles the following third-party components:
+
+* e2fsprogs debugfs/e2fsck (GPL/LGPL/BSD/MIT components as described by the
+  upstream NOTICE file). See Tools/e2fsprogs-NOTICE.txt.
+* Cygwin runtime DLL (GNU GPL with Cygwin exception). See
+  Tools/Cygwin-COPYING.txt.
+* The sample GAQ VoLTE overlay APK is supplied by the device firmware
+  analysis for this tool and is used unchanged. Redistribution must follow
+  the applicable firmware/OEM terms.
+
+Source references and pinned hashes are in Build/tools.lock.json.

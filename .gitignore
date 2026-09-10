@@ -1,0 +1,19 @@
+**/bin/
+**/obj/
+artifacts/
+Build/.cache/
+Build/cache/
+VoLTEVendorPatcher/Build/cygwin/
+VoLTEVendorPatcher/Build/cache/
+VoLTEVendorPatcher/Build/cache/cyg-download/
+debugfs-test*.img
+dbgcmd/
+
+# Local firmware dumps, carrier archives and generated patch outputs.
+# These files can be several gigabytes and may contain OEM-proprietary data.
+*.img
+*.simg
+*.rar
+*.zip
+inspect-init/
+spam-request-analysis.md

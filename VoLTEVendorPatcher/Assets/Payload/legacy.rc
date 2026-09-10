@@ -1,0 +1,16 @@
+# OPPO/Realme MTK legacy IMS/VoLTE profile (Android 8.1 / API 27)
+on boot
+    setprop persist.mtk.ims_support 1
+    setprop persist.mtk.volte_support 1
+    setprop persist.mtk.volte.enable 1
+    setprop persist.radio.volte_state 1
+    setprop persist.dbg.volte_avail_ovr 1
+    setprop persist.dbg.vt_avail_ovr 1
+
+on property:sys.boot_completed=1
+    setprop persist.mtk.ims_support 1
+    setprop persist.mtk.volte_support 1
+    setprop persist.mtk.volte.enable 1
+    setprop persist.radio.volte_state 1
+    setprop persist.dbg.volte_avail_ovr 1
+    setprop persist.dbg.vt_avail_ovr 1

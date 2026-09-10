@@ -1,0 +1,26 @@
+# OPPO/Realme MTK modern IMS/VoLTE profile (Android 9/10)
+on boot
+    setprop persist.mtk.ims_support 1
+    setprop persist.mtk.volte_support 1
+    setprop persist.mtk.volte.enable 1
+    setprop persist.radio.volte_state 1
+    setprop persist.dbg.volte_avail_ovr 1
+    setprop persist.dbg.vt_avail_ovr 1
+    setprop persist.vendor.mtk.ims_support 1
+    setprop persist.vendor.mtk.volte_support 1
+    setprop persist.vendor.mtk.volte.enable 3
+    setprop persist.vendor.radio.volte_state 3
+    setprop persist.vendor.mtk_dynamic_ims_switch 0
+
+on property:sys.boot_completed=1
+    setprop persist.mtk.ims_support 1
+    setprop persist.mtk.volte_support 1
+    setprop persist.mtk.volte.enable 1
+    setprop persist.radio.volte_state 1
+    setprop persist.dbg.volte_avail_ovr 1
+    setprop persist.dbg.vt_avail_ovr 1
+    setprop persist.vendor.mtk.ims_support 1
+    setprop persist.vendor.mtk.volte_support 1
+    setprop persist.vendor.mtk.volte.enable 3
+    setprop persist.vendor.radio.volte_state 3
+    setprop persist.vendor.mtk_dynamic_ims_switch 0

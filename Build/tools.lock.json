@@ -1,0 +1,22 @@
+{
+  "e2fsprogsSource": {
+    "version": "1.47.4",
+    "url": "https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.gz",
+    "sha256": "DA274408BEBBFD13A5A2FC3CFC66E3FFFF17C48534673AA67F88D49B99123B96"
+  },
+  "libsparseSource": {
+    "revision": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "url": "https://android.googlesource.com/platform/system/core/+archive/a3b721a32242006b59cb12bd62c9133632af3a2d/libsparse.tar.gz",
+    "sha256": "5C8BFF580E2A2EA428929B90E0A205276BC1CDED89F7974EABBCB02BA91F0B6F"
+  },
+  "cygwinSetup": {
+    "version": "2.937",
+    "url": "https://cygwin.com/setup-x86_64.exe",
+    "sha256": "2C9F2FB56E1FB687B5D9680AFA8F8B06E6214F0E483096AF0EAE1946431226C5"
+  },
+  "cygwinE2fsprogs": {
+    "version": "1.44.5-1",
+    "mirror": "https://mirrors.kernel.org/sourceware/cygwin/",
+    "source": "https://cygwin.com/packages/summary/e2fsprogs.html"
+  }
+}
