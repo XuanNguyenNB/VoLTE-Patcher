@@ -32,7 +32,7 @@ jobs:
         run: .\Build\publish.ps1 -SkipToolBootstrap
 
       - name: Lưu artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: VoLTEVendorPatcher-win-x64
           path: |
