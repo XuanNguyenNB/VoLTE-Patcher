@@ -1,15 +1,17 @@
-# Smoke/golden tests
+# Kiểm thử smoke/golden
 
-`run-smoke.ps1` builds and runs the internal harness. It checks:
+`run-smoke.ps1` build và chạy test harness nội bộ. Bộ test kiểm tra:
 
-- F11 Android 9 stock is `Patchable` with the modern profile;
-- F11 Android 10, Realme C2 fixed, and F7 API 27 fixed are `AlreadyPatched`;
-- sparse converter raw/sparse round-trip;
-- F11 patch creates a new image, leaves the stock SHA-256 unchanged, and re-analyzes as `AlreadyPatched`.
+- F11 Android 9 stock ở trạng thái `Patchable` với profile modern;
+- F11 Android 10, Realme C2 fixed và F7 API 27 fixed ở trạng thái `AlreadyPatched`;
+- A5s/CPH1912 có thể phân tích trực tiếp từ RAR và ở trạng thái `Patchable`;
+- ánh xạ catalog profile API 27/28/29 và từ chối API ngoài phạm vi;
+- chuyển đổi raw/sparse khứ hồi không làm thay đổi dữ liệu;
+- patch F11 tạo image mới, không đổi SHA-256 của stock và output phân tích lại thành `AlreadyPatched`.
 
-The harness uses the fixture images in the workspace and the same helper bundle as the release. To keep a generated golden output instead of a temporary file:
+Test harness dùng các fixture trong workspace và cùng helper bundle với bản release.
 
-The OEM firmware fixtures are intentionally not included in the public repository. When they are absent, fixture-specific checks are reported as `SKIP`; the sparse round-trip check still runs. Place your own legally obtained fixtures in the workspace to enable the golden checks.
+Các firmware OEM không được đưa vào repository công khai. Khi không có fixture, test tương ứng sẽ báo `SKIP`; test catalog và sparse vẫn chạy. Có thể đặt firmware do bạn sở hữu hợp pháp vào workspace để bật golden test.
 
 ```powershell
 $env:VOLTE_OUTPUT = '.\\F11 ANDROID 9\\vendor_F11_Android9_VoLTE_patched_v1.img'
@@ -17,4 +19,4 @@ dotnet run --project .\\Tests\\VoLTEVendorPatcher.Tests\\VoLTEVendorPatcher.Test
 Remove-Item Env:VOLTE_OUTPUT
 ```
 
-For a sparse golden run, convert a fixture with the managed converter first and run the app against the resulting `.simg`; the same output verification path is used by the GUI.
+Để chạy golden test với sparse, hãy chuyển fixture bằng converter managed trước rồi dùng file `.simg`; GUI sử dụng cùng luồng xác minh output.

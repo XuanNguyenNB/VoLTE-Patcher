@@ -7,5 +7,9 @@ VoLTE Vendor Patcher bundles the following third-party components:
 * The sample GAQ VoLTE overlay APK is supplied by the device firmware
   analysis for this tool and is used unchanged. Redistribution must follow
   the applicable firmware/OEM terms.
+* SharpCompress 0.50.4 (MIT) is used to read RAR archives without invoking
+  WinRAR, 7-Zip, PowerShell, or another runtime process.
 
-Source references and pinned hashes are in Build/tools.lock.json.
+Native source references and pinned hashes are in Build/tools.lock.json.
+The SharpCompress version is pinned in VoLTEVendorPatcher.csproj; its full MIT
+license is bundled as Tools/SharpCompress-LICENSE.txt.

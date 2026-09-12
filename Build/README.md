@@ -19,6 +19,8 @@ Các hash URL được khóa trong [tools.lock.json](tools.lock.json). Hash help
 
 Sparse image được xử lý bằng converter managed trong ứng dụng (không cần WSL hoặc `simg2img` lúc chạy). Archive `libsparse` được khóa để có thể thay thế bằng native AOSP helper trong pipeline sau này mà không đổi hợp đồng GUI.
 
+File RAR được đọc bằng SharpCompress 0.50.4 (MIT), khóa phiên bản trong project. Tool chỉ nhận archive chứa đúng một `vendor.img`, `vendor_a.img` hoặc `vendor_b.img`; không gọi WinRAR/7-Zip và không ghi file theo đường dẫn lấy từ archive.
+
 ## Ký phát hành
 
 Chưa có certificate Authenticode mặc định. Có thể ký trong pipeline nội bộ:

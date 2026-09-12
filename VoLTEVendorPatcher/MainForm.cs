@@ -177,7 +177,7 @@ internal sealed class MainForm : Form
 
         var hint = new Label
         {
-            Text = "Kéo và thả vendor.img vào cửa sổ này để bắt đầu phân tích.",
+            Text = "Kéo và thả vendor.img hoặc file RAR chứa vendor image để bắt đầu.",
             ForeColor = MutedColor,
             AutoSize = true,
             Anchor = AnchorStyles.Left,
@@ -384,7 +384,7 @@ internal sealed class MainForm : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = "Android image (*.img;*.simg)|*.img;*.simg|Tất cả tệp (*.*)|*.*",
+            Filter = "Vendor image / RAR (*.img;*.simg;*.rar)|*.img;*.simg;*.rar|Android image (*.img;*.simg)|*.img;*.simg|RAR (*.rar)|*.rar|Tất cả tệp (*.*)|*.*",
             CheckFileExists = true,
             Title = "Chọn vendor image"
         };

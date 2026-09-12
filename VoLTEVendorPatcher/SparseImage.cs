@@ -116,7 +116,7 @@ internal static class SparseImage
         var totalBlocks = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(16, 4));
         var totalChunks = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(20, 4));
         if (magic != Magic || major != MajorVersion || fileHeader < 28 || chunkHeader < 12 || blockSize == 0 || totalBlocks == 0)
-            throw new PatcherException("Android sparse header khÃ´ng há»£p lá»‡.");
+            throw new PatcherException("Android sparse header không hợp lệ.");
         if (magic != Magic || major != MajorVersion) throw new PatcherException("Android sparse header không hợp lệ.");
         return new SparseHeader(blockSize, totalBlocks, totalChunks, fileHeader, chunkHeader);
     }

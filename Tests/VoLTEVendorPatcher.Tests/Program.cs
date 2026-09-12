@@ -51,7 +51,52 @@ var tools = Path.Combine(root, "VoLTEVendorPatcher", "Assets", "Tools");
 if (Environment.GetEnvironmentVariable("VOLTE_TEST_EMBEDDED") != "1")
     Environment.SetEnvironmentVariable("VOLTE_PATCHER_TOOLS", tools);
 var engine = new PatcherEngine();
+
+if (args.Length > 2 && args[0].Equals("--patch", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        var analysis = await engine.AnalyzeAsync(Path.GetFullPath(args[1]), null, CancellationToken.None);
+        var result = await engine.PatchAsync(analysis, Path.GetFullPath(args[2]), null, CancellationToken.None);
+        var verified = await engine.AnalyzeAsync(result.OutputPath, null, CancellationToken.None);
+        Console.WriteLine(verified.ToDisplayText());
+        Console.WriteLine(result.Message);
+        Console.WriteLine($"Output: {result.OutputPath}");
+        Console.WriteLine($"SHA-256: {result.OutputHash}");
+        return verified.State == PatchState.AlreadyPatched ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 1;
+    }
+}
+
+if (args.Length > 1 && args[0].Equals("--analyze", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        var result = await engine.AnalyzeAsync(Path.GetFullPath(args[1]), null, CancellationToken.None);
+        Console.WriteLine(result.ToDisplayText());
+        Console.WriteLine(result.Message);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 1;
+    }
+}
+
 var failures = new List<string>();
+
+if (PatchProfileCatalog.Resolve(27)?.Id != PatchProfile.LegacyApi27)
+    failures.Add("profile catalog: API 27 không ánh xạ tới LegacyApi27");
+if (PatchProfileCatalog.Resolve(28)?.Id != PatchProfile.ModernApi28Plus ||
+    PatchProfileCatalog.Resolve(29)?.Id != PatchProfile.ModernApi28Plus)
+    failures.Add("profile catalog: API 28–29 không ánh xạ tới ModernApi28Plus");
+if (PatchProfileCatalog.Resolve(26) != null || PatchProfileCatalog.Resolve(30) != null)
+    failures.Add("profile catalog: API ngoài phạm vi không bị từ chối");
 
 async Task Check(string relative, PatchState expected)
 {
@@ -70,6 +115,7 @@ await Check(Path.Combine("F11 ANDROID 9", "vendor.img"), PatchState.Patchable);
 await Check(Path.Combine("F11_Android10_VENDOR", "vendor_F11_Android10_.img"), PatchState.AlreadyPatched);
 await Check("vendor c2_VoLTE_fixed.img", PatchState.AlreadyPatched);
 await Check("vendor_F7_CPH1859_VoLTE_android 8.img", PatchState.AlreadyPatched);
+await Check("CPH1912_A5S_dump_vendor.rar", PatchState.Patchable);
 
 var sparseRoot = Path.Combine(Path.GetTempPath(), "volte-sparse-smoke-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(sparseRoot);

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using SharpCompress.Archives.Rar;
 
 namespace VoLTEVendorPatcher;
 
@@ -14,6 +15,7 @@ internal sealed class AnalysisResult
     public required string InputPath { get; init; }
     public required ImageFormat Format { get; init; }
     public required long FileSize { get; init; }
+    public required long RawFileSize { get; init; }
     public required string Board { get; init; }
     public required string Platform { get; init; }
     public required int FirstApiLevel { get; init; }
@@ -25,6 +27,7 @@ internal sealed class AnalysisResult
     public required long FreeInodes { get; init; }
     public required string BuildPropHash { get; init; }
     public required string Message { get; init; }
+    public string? ArchiveEntryName { get; init; }
     public bool CanPatch => State is PatchState.Patchable && HasImsStack && HasSelinuxXattr;
 
     public string ToDisplayText()
@@ -36,8 +39,9 @@ internal sealed class AnalysisResult
             PatchState.Conflict => "CONFLICT",
             _ => "NOT COMPATIBLE"
         };
+        var format = ArchiveEntryName == null ? Format.ToString() : $"RAR → {Format}";
         return $"State       : {state}\r\n" +
-               $"Format      : {Format}\r\n" +
+               $"Format      : {format}\r\n" +
                $"Size        : {FileSize:N0} bytes\r\n" +
                $"Board       : {Board}\r\n" +
                $"Platform    : {Platform}\r\n" +
@@ -69,8 +73,6 @@ internal sealed class PatcherException : Exception
 internal sealed class PatcherEngine
 {
     private const string OverlaySha256 = "1010C1C7855C0150C204C7E6376F665FCB3B55C609BDFFAFA8114B0952B81694";
-    private const string LegacyInitSha256 = "C9DF5D3D0ADFF8CC2A3A4EBB4CAF7A6B060BC98D7773BC3EBCE960DDA408CCE4";
-    private const string ModernInitSha256 = "4CC704105EF8BCBEE685D44FF9B0B126B8568B396D4CDB9AD94026F45BA790EF";
     private const string CanonicalOverlay = "/overlay/GAQVoLTE/GAQ_OPPO_MTK_VoLTE_Overlay.apk";
     private const string CanonicalInit = "/etc/init/gaq_oppo_mtk_volte.rc";
     private static readonly string[] RequiredBinaries = ["volte_ua", "volte_stack", "volte_imcb", "volte_imsm_93", "wfca"];
@@ -83,20 +85,40 @@ internal sealed class PatcherEngine
         if (!File.Exists(fullPath)) throw new PatcherException("Không tìm thấy image.");
         progress?.Report(new(5, "Nhận diện định dạng image…"));
         var detected = await SparseImage.DetectAsync(fullPath, token);
-        var rawPath = fullPath;
-        string? staging = null;
+        var sourceImage = fullPath;
+        string? archiveRoot = null;
+        string? archiveEntryName = null;
+        string? rawStaging = null;
         try
         {
+            if (IsRarPath(fullPath))
+            {
+                archiveRoot = Path.Combine(Path.GetTempPath(), "volte-rar-analyze-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(archiveRoot);
+                sourceImage = Path.Combine(archiveRoot, "vendor.img");
+                progress?.Report(new(7, "Giải nén vendor.img từ RAR…"));
+                archiveEntryName = await ExtractVendorFromRarAsync(fullPath, sourceImage, progress, token);
+                detected = await SparseImage.DetectAsync(sourceImage, token);
+            }
+
+            var rawPath = sourceImage;
             if (detected.Format == ImageFormat.Sparse)
             {
-                staging = Path.Combine(Path.GetTempPath(), "volte-analyze-" + Guid.NewGuid().ToString("N") + ".raw");
+                rawStaging = Path.Combine(Path.GetTempPath(), "volte-analyze-" + Guid.NewGuid().ToString("N") + ".raw");
                 progress?.Report(new(12, "Giải sparse image để phân tích…"));
-                await SparseImage.ToRawAsync(fullPath, staging, detected.SparseHeader!.Value, progress, token);
-                rawPath = staging;
+                await SparseImage.ToRawAsync(sourceImage, rawStaging, detected.SparseHeader!.Value, progress, token);
+                rawPath = rawStaging;
             }
-            return await AnalyzeRawAsync(fullPath, rawPath, detected.Format, progress, token);
+            return await AnalyzeRawAsync(fullPath, rawPath, detected.Format,
+                new FileInfo(sourceImage).Length,
+                detected.SparseHeader?.RawLength ?? new FileInfo(sourceImage).Length,
+                archiveEntryName, progress, token);
         }
-        finally { TryDelete(staging); }
+        finally
+        {
+            TryDelete(rawStaging);
+            TryDeleteDirectory(archiveRoot);
+        }
     }
 
     public async Task<PatchResult> PatchAsync(AnalysisResult analysis, string outputPath, IProgress<ProgressUpdate>? progress, CancellationToken token)
@@ -111,8 +133,10 @@ internal sealed class PatcherEngine
         SparseHeader? sparseHeader = null;
         if (analysis.Format == ImageFormat.Sparse)
         {
-            sparseHeader = (await SparseImage.DetectAsync(input, token)).SparseHeader!.Value;
-            EnsureFreeSpace(outputDirectory, checked(sparseHeader.Value.RawLength + analysis.FileSize + 32L * 1024 * 1024));
+            if (analysis.ArchiveEntryName == null)
+                sparseHeader = (await SparseImage.DetectAsync(input, token)).SparseHeader!.Value;
+            EnsureFreeSpace(outputDirectory,
+                checked(analysis.RawFileSize + analysis.FileSize + 32L * 1024 * 1024));
         }
         else
         {
@@ -124,7 +148,24 @@ internal sealed class PatcherEngine
         var rawWork = analysis.Format == ImageFormat.Sparse ? Path.Combine(runRoot, "vendor.raw") : partial;
         try
         {
-            if (analysis.Format == ImageFormat.Sparse)
+            if (analysis.ArchiveEntryName != null)
+            {
+                if (analysis.Format == ImageFormat.Sparse)
+                {
+                    var archivedSparse = Path.Combine(runRoot, "vendor.simg");
+                    progress?.Report(new(5, "Giải nén vendor.img từ RAR…"));
+                    await ExtractVendorFromRarAsync(input, archivedSparse, progress, token);
+                    sparseHeader = (await SparseImage.DetectAsync(archivedSparse, token)).SparseHeader!.Value;
+                    progress?.Report(new(20, "Chuyển sparse sang raw…"));
+                    await SparseImage.ToRawAsync(archivedSparse, rawWork, sparseHeader.Value, progress, token);
+                }
+                else
+                {
+                    progress?.Report(new(5, "Giải nén vendor.img từ RAR…"));
+                    await ExtractVendorFromRarAsync(input, rawWork, progress, token);
+                }
+            }
+            else if (analysis.Format == ImageFormat.Sparse)
             {
                 progress?.Report(new(5, "Chuyển sparse sang raw…"));
                 await SparseImage.ToRawAsync(input, rawWork, sparseHeader!.Value, progress, token);
@@ -163,7 +204,9 @@ internal sealed class PatcherEngine
         finally { TryDeleteDirectory(runRoot); }
     }
 
-    private async Task<AnalysisResult> AnalyzeRawAsync(string original, string rawPath, ImageFormat format, IProgress<ProgressUpdate>? progress, CancellationToken token)
+    private async Task<AnalysisResult> AnalyzeRawAsync(string original, string rawPath, ImageFormat format,
+        long imageSize, long rawFileSize, string? archiveEntryName,
+        IProgress<ProgressUpdate>? progress, CancellationToken token)
     {
         if (!await Ext4Image.HasMagicAsync(rawPath, token)) throw new PatcherException("Image sau khi giải nén không phải ext4.");
         var debugfs = _tools.Require("debugfs.exe");
@@ -174,24 +217,70 @@ internal sealed class PatcherEngine
         progress?.Report(new(30, "Đọc build.prop và IMS stack…"));
         var buildProp = await DebugfsCatAsync(debugfs, rawPath, "/build.prop", token);
         var props = ParseProperties(buildProp);
-        var board = FirstValue(props, "ro.product.board", "ro.product.device", "ro.product.brand") ?? "unknown";
-        var platform = FirstValue(props, "ro.board.platform", "ro.mediatek.platform") ?? "unknown";
-        var api = ParseInt(FirstValue(props, "ro.product.first_api_level")) ?? -1;
-        var allIdentity = (board + " " + FirstValue(props, "ro.product.manufacturer", "ro.product.brand")).ToLowerInvariant();
+        var manufacturer = FirstValue(props,
+            "ro.product.manufacturer",
+            "ro.vendor.product.manufacturer",
+            "ro.product.vendor.manufacturer",
+            "ro.odm.product.manufacturer");
+        var brand = FirstValue(props,
+            "ro.product.brand",
+            "ro.vendor.product.brand",
+            "ro.product.vendor.brand",
+            "ro.odm.product.brand");
+        var device = FirstValue(props,
+            "ro.product.device",
+            "ro.vendor.product.device",
+            "ro.product.vendor.device",
+            "ro.odm.product.device");
+        var board = FirstValue(props, "ro.product.board")
+                    ?? device
+                    ?? brand
+                    ?? manufacturer
+                    ?? "unknown";
+        var platform = FirstValue(props,
+            "ro.board.platform",
+            "ro.mediatek.platform",
+            "ro.vendor.mediatek.platform") ?? "unknown";
+        var api = ParseInt(FirstValue(props,
+            "ro.product.first_api_level",
+            "ro.board.first_api_level",
+            "ro.vendor.build.version.sdk")) ?? -1;
+        var allIdentity = string.Join(' ', new[]
+        {
+            board,
+            manufacturer,
+            brand,
+            device
+        }.Where(value => !string.IsNullOrWhiteSpace(value))).ToLowerInvariant();
         if (!platform.StartsWith("mt", StringComparison.OrdinalIgnoreCase)) throw new PatcherException($"Không phải nền tảng MediaTek: {platform}");
         if (!(allIdentity.Contains("oppo") || allIdentity.Contains("realme") || board.StartsWith("rm", StringComparison.OrdinalIgnoreCase))) throw new PatcherException($"Không nhận diện được OPPO/Realme board: {board}");
-        if (api is < 27 or > 29) throw new PatcherException($"API đầu tiên {api} ngoài phạm vi hỗ trợ (27–29; Android 8.1–10).");
-        var profile = props.Keys.Any(k => k.StartsWith("persist.vendor.", StringComparison.OrdinalIgnoreCase) && k.Contains("ims", StringComparison.OrdinalIgnoreCase)) || props.ContainsKey("persist.vendor.mtk_dynamic_ims_switch") ? PatchProfile.ModernApi28Plus : PatchProfile.LegacyApi27;
+        var profileDefinition = PatchProfileCatalog.Resolve(api);
+        if (profileDefinition == null)
+            throw new PatcherException($"API đầu tiên {api} ngoài các profile đã kiểm chứng ({PatchProfileCatalog.SupportedApiSummary}; Android 8.1–10).");
+        var profile = profileDefinition.Id;
         var binListing = await DebugfsRunAsync(debugfs, rawPath, "ls -l /bin", token);
         var initListing = await DebugfsRunAsync(debugfs, rawPath, "ls -l /etc/init", token);
-        var hasStack = RequiredBinaries.All(b => Regex.IsMatch(binListing, $@"\b{Regex.Escape(b)}\b")) && RequiredInitFragments.All(f => Regex.IsMatch(initListing, $@"\b{Regex.Escape(f)}\b"));
-        if (!hasStack) throw new PatcherException("Thiếu một hoặc nhiều binary/init service IMS-VoLTE cần thiết.");
+        var missingBinaries = RequiredBinaries.Where(binary =>
+            !Regex.IsMatch(binListing, $@"\b{Regex.Escape(binary)}\b")).ToArray();
+        var missingInit = RequiredInitFragments.Where(fragment =>
+            !Regex.IsMatch(initListing, $@"\b{Regex.Escape(fragment)}\b")).ToArray();
+        var hasStack = missingBinaries.Length == 0 && missingInit.Length == 0;
+        if (!hasStack)
+        {
+            var details = new List<string>();
+            if (missingBinaries.Length > 0) details.Add("binary: " + string.Join(", ", missingBinaries));
+            if (missingInit.Length > 0) details.Add("init: " + string.Join(", ", missingInit));
+            throw new PatcherException("IMS/VoLTE stack chưa đầy đủ; thiếu " + string.Join("; ", details) + ".");
+        }
         var stats = await DebugfsRunAsync(debugfs, rawPath, "stats", token);
         var freeBlocks = ParseLong(stats, @"Free blocks:\s*(\d+)");
         var freeInodes = ParseLong(stats, @"Free inodes:\s*(\d+)");
         if (freeBlocks < 8 || freeInodes < 3)
             throw new PatcherException($"Không đủ chỗ trống ext4 (cần tối thiểu 8 block và 3 inode; còn {freeBlocks} block/{freeInodes} inode).");
-        if (!Regex.IsMatch(stats, @"volume name\s*[:=]\s*vendor", RegexOptions.IgnoreCase)) throw new PatcherException("Volume label không phải vendor.");
+        var hasVendorLabel = Regex.IsMatch(stats, @"volume name\s*[:=]\s*vendor(?:\s|$)", RegexOptions.IgnoreCase);
+        var wasMountedAsVendor = Regex.IsMatch(stats, @"last mounted on\s*[:=]\s*/vendor/?(?:\s|$)", RegexOptions.IgnoreCase);
+        if (!hasVendorLabel && !wasMountedAsVendor)
+            throw new PatcherException("Filesystem không được nhận diện là vendor (thiếu volume label và lịch sử mount /vendor). ");
         var ea = await DebugfsRunAsync(debugfs, rawPath, "ea_list /overlay", token);
         var hasEa = ea.Contains("security.selinux", StringComparison.OrdinalIgnoreCase);
         var buildHash = await HashDebugfsFileAsync(debugfs, rawPath, "/build.prop", token);
@@ -204,18 +293,19 @@ internal sealed class PatcherEngine
             _ => "Image tương thích với profile " + profile
         };
         if (!hasEa) state = PatchState.Conflict;
-        return new AnalysisResult { InputPath = original, Format = format, FileSize = new FileInfo(original).Length, Board = board, Platform = platform, FirstApiLevel = api, Profile = profile, State = state, HasImsStack = hasStack, HasSelinuxXattr = hasEa, FreeBlocks = freeBlocks, FreeInodes = freeInodes, BuildPropHash = buildHash, Message = message };
+        return new AnalysisResult { InputPath = original, Format = format, FileSize = imageSize, RawFileSize = rawFileSize, Board = board, Platform = platform, FirstApiLevel = api, Profile = profile, State = state, HasImsStack = hasStack, HasSelinuxXattr = hasEa, FreeBlocks = freeBlocks, FreeInodes = freeInodes, BuildPropHash = buildHash, Message = message, ArchiveEntryName = archiveEntryName };
     }
 
     private async Task PatchRawAsync(string rawPath, PatchProfile profile, AnalysisResult analysis, string runRoot, IProgress<ProgressUpdate>? progress, CancellationToken token)
     {
+        var profileDefinition = PatchProfileCatalog.Get(profile);
         var debugfs = _tools.Require("debugfs.exe");
         var payloadDir = Path.Combine(runRoot, "payload");
         Directory.CreateDirectory(payloadDir);
         await EmbeddedPayload.WriteAsync("GAQ_OPPO_MTK_VoLTE_Overlay.apk", Path.Combine(payloadDir, "payload.apk"), OverlaySha256, token);
         var initPayload = Path.Combine(payloadDir, "init.rc");
-        await EmbeddedPayload.WriteTextAsync(profile == PatchProfile.LegacyApi27 ? "legacy.rc" : "modern.rc", initPayload, token);
-        var expectedInitHash = profile == PatchProfile.LegacyApi27 ? LegacyInitSha256 : ModernInitSha256;
+        await EmbeddedPayload.WriteTextAsync(profileDefinition.InitTemplate, initPayload, token);
+        var expectedInitHash = profileDefinition.InitSha256;
         if (!(await HashFileAsync(initPayload, token)).Equals(expectedInitHash, StringComparison.OrdinalIgnoreCase))
             throw new PatcherException("Init template tích hợp bị sai hash.");
         await File.WriteAllBytesAsync(Path.Combine(payloadDir, "overlay.label"), Encoding.UTF8.GetBytes("u:object_r:vendor_overlay_file:s0\0"), token);
@@ -280,14 +370,14 @@ internal sealed class PatcherEngine
             if (!apkHash.Equals(OverlaySha256, StringComparison.OrdinalIgnoreCase)) throw new PatcherException("APK overlay hash không khớp.");
             var initText = await File.ReadAllTextAsync(init, token);
             var initHash = await HashFileAsync(init, token);
-            var expectedInitHash = analysis.Profile == PatchProfile.LegacyApi27 ? LegacyInitSha256 : ModernInitSha256;
+            var expectedInitHash = PatchProfileCatalog.Get(analysis.Profile).InitSha256;
             if (!initHash.Equals(expectedInitHash, StringComparison.OrdinalIgnoreCase)) throw new PatcherException("Init profile hash không khớp.");
             foreach (var required in ProfileLines(analysis.Profile)) if (!initText.Contains(required, StringComparison.Ordinal)) throw new PatcherException("Init profile thiếu dòng: " + required);
             var stat = await DebugfsRunAsync(debugfs, rawPath, "stat /overlay/GAQVoLTE", token);
             var apkMetadata = await DebugfsRunAsync(debugfs, rawPath, "stat " + CanonicalOverlay, token);
             var initMetadata = await DebugfsRunAsync(debugfs, rawPath, "stat " + CanonicalInit, token);
             if (!apkMetadata.Contains("Mode:  0644", StringComparison.Ordinal) || !apkMetadata.Contains("vendor_overlay_file", StringComparison.Ordinal) ||
-                !initMetadata.Contains("Mode:  0644", StringComparison.Ordinal) || !initMetadata.Contains("vendor_configs_file", StringComparison.Ordinal)) throw new PatcherException("Metadata overlay/init khÃ´ng Ä‘Ãºng.");
+                !initMetadata.Contains("Mode:  0644", StringComparison.Ordinal) || !initMetadata.Contains("vendor_configs_file", StringComparison.Ordinal)) throw new PatcherException("Metadata overlay/init không đúng.");
             if (!stat.Contains("Mode:  0755", StringComparison.Ordinal) || !stat.Contains("vendor_overlay_file", StringComparison.Ordinal)) throw new PatcherException("Metadata overlay không đúng.");
             var buildHash = await HashDebugfsFileAsync(debugfs, rawPath, "/build.prop", token);
             if (!buildHash.Equals(analysis.BuildPropHash, StringComparison.OrdinalIgnoreCase)) throw new PatcherException("build.prop bị thay đổi ngoài phạm vi.");
@@ -382,7 +472,74 @@ internal sealed class PatcherEngine
     private static string? FirstValue(IReadOnlyDictionary<string, string> props, params string[] keys) => keys.Select(k => props.TryGetValue(k, out var value) ? value : null).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
     private static int? ParseInt(string? value) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : null;
     private static long ParseLong(string text, string pattern) => long.TryParse(Regex.Match(text, pattern, RegexOptions.IgnoreCase).Groups[1].Value, out var n) ? n : 0;
-    private static IEnumerable<string> ProfileLines(PatchProfile p) => p == PatchProfile.LegacyApi27 ? ["setprop persist.mtk.ims_support 1", "setprop persist.mtk.volte_support 1", "setprop persist.mtk.volte.enable 1", "setprop persist.radio.volte_state 1", "setprop persist.dbg.volte_avail_ovr 1", "setprop persist.dbg.vt_avail_ovr 1"] : ["setprop persist.mtk.ims_support 1", "setprop persist.mtk.volte_support 1", "setprop persist.mtk.volte.enable 1", "setprop persist.radio.volte_state 1", "setprop persist.dbg.volte_avail_ovr 1", "setprop persist.dbg.vt_avail_ovr 1", "setprop persist.vendor.mtk.ims_support 1", "setprop persist.vendor.mtk.volte_support 1", "setprop persist.vendor.mtk.volte.enable 3", "setprop persist.vendor.radio.volte_state 3", "setprop persist.vendor.mtk_dynamic_ims_switch 0"];
+    private static IEnumerable<string> ProfileLines(PatchProfile profile) =>
+        PatchProfileCatalog.Get(profile).RequiredInitLines;
+
+    private static bool IsRarPath(string path) =>
+        Path.GetExtension(path).Equals(".rar", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task<string> ExtractVendorFromRarAsync(string archivePath, string destination,
+        IProgress<ProgressUpdate>? progress, CancellationToken token)
+    {
+        try
+        {
+            using var archive = RarArchive.OpenArchive(archivePath);
+            var candidates = archive.Entries
+                .Where(entry => !entry.IsDirectory)
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Key))
+                .Where(entry => Regex.IsMatch(
+                    Path.GetFileName(entry.Key!.Replace('\\', '/')),
+                    @"^vendor(?:_[ab])?\.img$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .ToList();
+
+            if (candidates.Count == 0)
+                throw new PatcherException("RAR không chứa vendor.img, vendor_a.img hoặc vendor_b.img.");
+            if (candidates.Count > 1)
+                throw new PatcherException("RAR chứa nhiều vendor image; hãy chỉ giữ đúng image cần patch.");
+
+            var entry = candidates[0];
+            var entryKey = entry.Key!;
+            if (!entry.IsComplete)
+                throw new PatcherException("RAR nhiều phần chưa đầy đủ; cần cung cấp đủ các part của archive.");
+            if (entry.Size <= 0)
+                throw new PatcherException("Vendor image trong RAR rỗng hoặc không đọc được kích thước.");
+
+            EnsureFreeSpace(Path.GetDirectoryName(destination) ?? Path.GetTempPath(),
+                checked(entry.Size + 32L * 1024 * 1024));
+            await using var input = await entry.OpenEntryStreamAsync(token);
+            await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 8 * 1024 * 1024,
+                FileOptions.SequentialScan | FileOptions.Asynchronous);
+            var buffer = new byte[8 * 1024 * 1024];
+            long done = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer, token)) > 0)
+            {
+                await output.WriteAsync(buffer.AsMemory(0, read), token);
+                done += read;
+                progress?.Report(new(
+                    7 + (int)(Math.Min(done, entry.Size) * 8 / Math.Max(1, entry.Size)),
+                    $"Đang giải nén {Path.GetFileName(entryKey)}…"));
+            }
+            await output.FlushAsync(token);
+            if (done != entry.Size)
+                throw new PatcherException($"RAR giải nén thiếu dữ liệu (cần {entry.Size:N0}, nhận {done:N0} byte).");
+            return entryKey;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (PatcherException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new PatcherException("Không thể đọc RAR: " + ex.Message);
+        }
+    }
 
     private static async Task CopyWithProgressAsync(string source, string destination, IProgress<ProgressUpdate>? progress, CancellationToken token)
     {
@@ -405,7 +562,7 @@ internal sealed class PatcherEngine
         try
         {
             var available = new DriveInfo(root).AvailableFreeSpace;
-            if (available < required) throw new PatcherException($"KhÃ´ng Ä‘á»§ dung lÆ°á»£ng trÃªn {root} (cáº§n thÃªm khoáº£ng {required:N0} byte, cÃ²n {available:N0}).");
+            if (available < required) throw new PatcherException($"Không đủ dung lượng trên {root} (cần thêm khoảng {required:N0} byte, còn {available:N0}).");
         }
         catch (DriveNotFoundException) { }
     }
